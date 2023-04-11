@@ -1,9 +1,9 @@
-REPORT 513 MESSAGE-ID zsd.
+REPORT SDREPORT MESSAGE-ID zsd.
 ***********************************************************************
-* Description  : 全聯檔案匯入產生SAP訂單
+* Description  : Excel匯入產生SAP訂單
 ***********************************************************************
 INCLUDE zbdcrecx2.
-INCLUDE zrsdsd513top.
+INCLUDE top.
 ***********************************************************************
 * INITIALIZATION
 ***********************************************************************
@@ -73,7 +73,7 @@ FORM read_data .
         PERFORM get_file TABLES t_tab USING wa_tab p_file.
     ENDIF.
 
-    "整理T_TAB
+    "Organize T_TAB
     IF t_tab[] IS NOT INITIAL.
         DELETE t_tab INDEX 1.
         READ TABLE t_tab INTO wa_tab INDEX 1.
@@ -96,10 +96,10 @@ FORM read_data .
     SELECT matnr werks INTO CORRESPONDING FIELDS OF TABLE t_marc FROM marc
       WHERE werks = p_werks.
 
-    "整理資料到T_DATA中
+    "Move the data to T_DATA
     CLEAR wa_tab.
     LOOP AT t_tab INTO wa_tab.
-        "確認價格不能小於0
+        "Price can't under 0
         IF wa_tab-price < 0.
             MESSAGE s508 DISPLAY LIKE 'E'.
             STOP.
@@ -217,14 +217,14 @@ FORM process_data .
         READ TABLE t_return INTO wa_return WITH KEY type = 'E'.
         IF wa_return IS INITIAL.
             COMMIT WORK AND WAIT.
-            WRITE: / '已成功產生銷售訂單 : ', l_vbeln.
+            WRITE: / 'Sales Order successfully created : ', l_vbeln.
         ELSE.
-            WRITE:/ '錯誤發生: ', wa_return-message.
+            WRITE:/ 'Error Occur: ', wa_return-message.
             STOP.
         ENDIF.
     ENDIF.
 
-    "退貨
+    "Return Order
     CLEAR: wa_data, t_head[], t_item[], t_sch[], t_cond[], l_vbeln, w_posnr, w_addAll.
     LOOP AT t_data INTO wa_data WHERE kwmeng < 0.
         w_posnr = w_posnr + 10.
@@ -237,10 +237,10 @@ FORM process_data .
             CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
               EXPORTING
                 wait          = 'X'.
-                WRITE: / '已成功產生退貨訂單 : ', l_vbeln.
+                WRITE: / 'Successfully created return order : ', l_vbeln.
         ELSE.
             READ TABLE t_return INTO wa_return WITH KEY type = 'E'.
-            WRITE: / '出現錯誤: ', wa_return-message.
+            WRITE: / 'Error Occur: ', wa_return-message.
         ENDIF.
     ENDIF.
 
