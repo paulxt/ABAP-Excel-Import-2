@@ -1,0 +1,552 @@
+REPORT 513 MESSAGE-ID zsd.
+***********************************************************************
+* Description  : 全聯檔案匯入產生SAP訂單
+***********************************************************************
+INCLUDE zbdcrecx2.
+INCLUDE zrsdsd513top.
+***********************************************************************
+* INITIALIZATION
+***********************************************************************
+INITIALIZATION.
+***********************************************************************
+*AT SELECTION SCREEN
+***********************************************************************
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+    PERFORM f4_filename USING p_file.
+***********************************************************************
+* Start-of-selection PAUL
+***********************************************************************
+START-OF-SELECTION.
+    IF p_file IS INITIAL.
+        MESSAGE s005(tl) DISPLAY LIKE 'E'.
+        STOP.
+    ENDIF.
+
+    "Confirm the FileType
+    SELECT vbtyp auart INTO CORRESPONDING FIELDS OF TABLE t_tvak
+      FROM tvak WHERE auart = p_auart.
+    READ TABLE t_tvak INTO wa_tvak WITH KEY auart = p_auart.
+    IF NOT wa_tvak-vbtyp = 'C' OR wa_tvak-vbtyp = 'I'.
+        MESSAGE s507 DISPLAY LIKE 'E'.
+        STOP.
+    ENDIF.
+
+    "Check TCODE
+    CALL FUNCTION 'AUTHORITY_CHECK_TCODE'
+      EXPORTING
+        tcode = 'VA01'
+      EXCEPTIONS
+        ok = 0
+        not_ok = 2
+        OTHERS = 3.
+
+    PERFORM read_data.
+    PERFORM process_data.
+***********************************************************************
+* End-of-selection PAUL
+***********************************************************************
+END-OF-SELECTION.
+*    IF t_tab[] IS NOT INITIAL.
+*        PERFORM end_reoprt.
+*    ENDIF.
+*&---------------------------------------------------------------------*
+*& Form read_data
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM read_data .
+    REFRESH: t_data.
+
+    CALL FUNCTION 'GUI_IS_WEBGUI'
+      IMPORTING
+        is_webgui = w_webgui.
+
+    "資料為xlsx時，可以使這此開啟excel
+    IF w_webgui = 'X'.
+        PERFORM get_file_data TABLES t_tab USING wa_tab p_file.
+    ENDIF.
+
+    IF w_webgui IS INITIAL.
+        PERFORM get_file TABLES t_tab USING wa_tab p_file.
+    ENDIF.
+
+    "整理T_TAB
+    IF t_tab[] IS NOT INITIAL.
+        DELETE t_tab INDEX 1.
+        READ TABLE t_tab INTO wa_tab INDEX 1.
+        w_bstkd = wa_tab-return_t.
+        DO 3 TIMES.
+            DELETE t_tab INDEX 1.
+        ENDDO.
+
+        DESCRIBE TABLE t_tab LINES w_lines.
+        DELETE t_tab INDEX w_lines.
+*        w_lines = w_lines - 1.
+*        DELETE t_tab INDEX w_lines.
+    ENDIF.
+
+    "Catch EAN11 and MATNR
+    SELECT matnr ean11 INTO CORRESPONDING FIELDS OF TABLE t_matnr
+      FROM mara.
+    SELECT matnr vkorg vtweg INTO CORRESPONDING FIELDS OF TABLE t_mvke FROM mvke
+      WHERE vkorg = p_vkorg AND vtweg = p_vtweg.
+    SELECT matnr werks INTO CORRESPONDING FIELDS OF TABLE t_marc FROM marc
+      WHERE werks = p_werks.
+
+    "整理資料到T_DATA中
+    CLEAR wa_tab.
+    LOOP AT t_tab INTO wa_tab.
+        "確認價格不能小於0
+        IF wa_tab-price < 0.
+            MESSAGE s508 DISPLAY LIKE 'E'.
+            STOP.
+        ENDIF.
+
+        wa_data-auart = p_auart.
+        wa_data-bstkd = w_bstkd.
+        wa_data-audat = p_audat.
+        wa_data-vkorg = p_vkorg.
+        wa_data-vtweg = p_vtweg.
+        wa_data-spart = p_spart.
+        wa_data-vkbur = p_vkbur.
+        wa_data-kunnr = p_kunnr.
+        wa_data-get = p_get.
+        wa_data-werks = p_werks.
+        wa_data-sales = p_sales.
+
+        "1/2 line
+        IF wa_tab-price IS NOT INITIAL AND wa_tab-sales_t IS NOT INITIAL.
+            wa_data-kwmeng = wa_tab-sales_t.
+            wa_data-arktx = wa_tab-arktx.
+            "Convert the Value into minus form when the Number of it is minus form
+            IF wa_data-kwmeng < 0.
+                CONCATENATE '-' wa_tab-price INTO wa_data-netpr.
+                wa_data-netpr = wa_data-netpr * wa_data-kwmeng.
+            ELSE.
+                wa_data-netpr = wa_tab-price.
+            ENDIF.
+        ENDIF.
+        "2/2 line
+        IF wa_tab-price IS INITIAL AND wa_tab-sales_t IS INITIAL.
+            wa_data-ean11 = wa_tab-ean11.
+            CONCATENATE wa_data-arktx wa_tab-arktx INTO wa_data-arktx.
+        ENDIF.
+        "After getting value
+        IF wa_data-ean11 IS NOT INITIAL AND wa_data-netpr IS NOT INITIAL.
+            APPEND wa_data TO t_data.
+            CLEAR wa_data.
+        ENDIF.
+    ENDLOOP.
+
+    "Convert EAN to MATNR
+    CLEAR wa_data.
+    LOOP AT t_data INTO wa_data.
+        CLEAR wa_matnr.
+        READ TABLE t_matnr INTO wa_matnr WITH KEY ean11 = wa_data-ean11.
+        wa_data-matnr = wa_matnr-matnr.
+
+        "Check Duplicate
+        LOOP AT t_matnr INTO wa_matnr WHERE ean11 = wa_data-ean11 AND matnr <> wa_data-matnr.
+            CONCATENATE text-099 wa_tab-ean11 text-101 INTO error_message.
+            WRITE: / error_message.
+            STOP.
+        ENDLOOP.
+
+       "Check matnr is not initial
+        IF wa_data-matnr IS INITIAL.
+            CONCATENATE text-099 wa_data-ean11 text-100 INTO error_message.
+            WRITE: / error_message.
+            STOP.
+        ENDIF.
+
+        CLEAR wa_mvke.
+        READ TABLE t_mvke INTO wa_mvke WITH KEY matnr = wa_data-matnr.
+        IF wa_mvke IS INITIAL.
+            MESSAGE s384(m3) WITH p_vkorg p_vtweg DISPLAY LIKE 'E'.
+        ENDIF.
+
+        CLEAR wa_marc.
+        READ TABLE t_marc INTO wa_marc WITH KEY matnr = wa_data-matnr.
+        IF wa_marc IS INITIAL.
+            MESSAGE s200(m3) WITH p_werks wa_data-matnr DISPLAY LIKE 'E'.
+        ENDIF.
+
+        MODIFY t_data FROM wa_data.
+        CLEAR wa_data.
+    ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form process_data
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM process_data .
+    REFRESH: t_head, t_item, t_par, t_sch.
+
+    "進貨
+    CLEAR: wa_data.
+    LOOP AT t_data INTO wa_data WHERE kwmeng > 0.
+        w_posnr = w_posnr + 10.
+        PERFORM convert_data USING l_vbeln.
+        PERFORM process_bapi_data USING wa_data-auart wa_data-matnr space wa_data-kwmeng wa_data-netpr.
+    ENDLOOP.
+
+    CLEAR wa_data.
+    LOOP AT t_data INTO wa_data WHERE kwmeng < 0.
+        w_posnr = w_posnr + 10.
+        w_addAll = w_addAll + wa_data-netpr.
+*        SHIFT wa_data-kwmeng LEFT DELETING LEADING '-'.
+*        MODIFY t_data FROM wa_data.
+    ENDLOOP.
+    "訂單種類、料號、訂單理由、數量
+    IF w_addAll IS NOT INITIAL.
+        PERFORM process_bapi_data USING wa_data-auart 'NC16' space '1' w_addAll.
+    ENDIF.
+
+
+    IF t_item IS NOT INITIAL.
+        PERFORM create_quotation.
+
+        READ TABLE t_return INTO wa_return WITH KEY type = 'E'.
+        IF wa_return IS INITIAL.
+            COMMIT WORK AND WAIT.
+            WRITE: / '已成功產生銷售訂單 : ', l_vbeln.
+        ELSE.
+            WRITE:/ '錯誤發生: ', wa_return-message.
+            STOP.
+        ENDIF.
+    ENDIF.
+
+    "退貨
+    CLEAR: wa_data, t_head[], t_item[], t_sch[], t_cond[], l_vbeln, w_posnr, w_addAll.
+    LOOP AT t_data INTO wa_data WHERE kwmeng < 0.
+        w_posnr = w_posnr + 10.
+        PERFORM process_bapi_data USING 'ZRN5' wa_data-matnr 'REZ' wa_data-kwmeng space.
+    ENDLOOP.
+    IF t_item IS NOT INITIAL.
+        PERFORM create_return_quotation.
+
+        IF l_vbeln IS NOT INITIAL.
+            CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+              EXPORTING
+                wait          = 'X'.
+                WRITE: / '已成功產生退貨訂單 : ', l_vbeln.
+        ELSE.
+            READ TABLE t_return INTO wa_return WITH KEY type = 'E'.
+            WRITE: / '出現錯誤: ', wa_return-message.
+        ENDIF.
+    ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form get_file_data
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> T_TAB
+*&      --> P_FILE
+*&---------------------------------------------------------------------*
+FORM get_file_data  TABLES   lt_input
+                    USING lwa_input STRUCTURE wa_tab
+                          l_file.
+    DATA : lv_filename      TYPE string,
+       lt_records       TYPE solix_tab,
+       lv_headerxstring TYPE xstring,
+       lv_filelength    TYPE i,
+       l_index          TYPE sy-index.
+       "lv_qty           TYPE qsollwertc,
+       "lv_fltp          TYPE qsollwerte.
+
+    FIELD-SYMBOLS : <lt_data>   TYPE STANDARD TABLE,
+                    <lwa_data>  TYPE any,
+                    <l_field>   TYPE any,
+                    <l_field2>  TYPE any.
+
+    lv_filename = l_file.
+
+    CALL FUNCTION 'GUI_UPLOAD'
+      EXPORTING
+        filename                = lv_filename
+        filetype                = 'BIN'
+      IMPORTING
+        filelength              = lv_filelength
+        header                  = lv_headerxstring
+      TABLES
+        data_tab                = lt_records
+      EXCEPTIONS
+        file_open_error         = 1
+        file_read_error         = 2
+        no_batch                = 3
+        gui_refuse_filetransfer = 4
+        invalid_type            = 5
+        no_authority            = 6
+        unknown_error           = 7
+        bad_data_format         = 8
+        header_not_allowed      = 9
+        separator_not_allowed   = 10
+        header_too_long         = 11
+        unknown_dp_error        = 12
+        access_denied           = 13
+        dp_out_of_memory        = 14
+        disk_full               = 15
+        dp_timeout              = 16
+        OTHERS                  = 17.
+
+    "convert binary data to xstring
+    "if you are using cl_fdt_xl_spreadsheet in odata then skips this step
+    "as excel file will already be in xstring
+    CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
+      EXPORTING
+        input_length = lv_filelength
+      IMPORTING
+        buffer       = lv_headerxstring
+      TABLES
+        binary_tab   = lt_records
+      EXCEPTIONS
+        failed       = 1
+        OTHERS       = 2.
+
+    IF sy-subrc <> 0.
+        MESSAGE s127(swf_http) DISPLAY LIKE 'E'.
+    ENDIF.
+
+    DATA: lo_excel_ref TYPE REF TO cl_fdt_xl_spreadsheet .
+
+    TRY .
+        lo_excel_ref = NEW cl_fdt_xl_spreadsheet(
+                                document_name = lv_filename
+                                xdocument     = lv_headerxstring ) .
+    CATCH cx_fdt_excel_core.
+        MESSAGE s127(swf_http) DISPLAY LIKE 'E'.
+    ENDTRY .
+
+    "Get List of Worksheets
+    TRY .
+        lo_excel_ref->if_fdt_doc_spreadsheet~get_worksheet_names(
+          IMPORTING
+            worksheet_names = DATA(lt_worksheets) ).
+    CATCH cx_sy_ref_is_initial.
+        MESSAGE s127(swf_http) DISPLAY LIKE 'E'.
+    ENDTRY.
+
+    IF NOT lt_worksheets IS INITIAL.
+        "Decide which sheet would you want to upload
+        READ TABLE lt_worksheets INTO DATA(lv_woksheetname) INDEX 2.
+
+        DATA(lo_data_ref) = lo_excel_ref->if_fdt_doc_spreadsheet~get_itab_from_worksheet(
+                                                 lv_woksheetname ).
+        "now you have excel work sheet data in dyanmic internal table
+        ASSIGN lo_data_ref->* TO <lt_data>.
+    ENDIF.
+
+    IF <lt_data> IS ASSIGNED.
+        LOOP AT <lt_data> ASSIGNING <lwa_data>.
+            CLEAR: lwa_input.
+            DO 200 TIMES.
+               l_index = sy-index.
+
+               UNASSIGN: <l_field>, <l_field2>.
+               ASSIGN COMPONENT l_index OF STRUCTURE <lwa_data> TO <l_field>.
+               ASSIGN COMPONENT l_index OF STRUCTURE lwa_input TO <l_field2>.
+               IF <l_field> IS ASSIGNED AND <l_field2> IS ASSIGNED.
+                    <l_field2> = <l_field> .
+               ELSE.
+                    EXIT.
+               ENDIF.
+            ENDDO.
+            APPEND lwa_input TO lt_input.
+        ENDLOOP.
+**& 2022/10/27 shenli 如上方法轉換后，comp_qty字段如果是0.0xx的時候，會自動轉換為科學計數法，
+**& 因此需要將此計數方式改爲正常的小數進行處理。(ITR202210059-02)
+*        LOOP AT lt_input INTO wa_input.
+*          IF sy-tabix > 1.
+*            MOVE wa_input-comp_qty TO lv_fltp.
+*            CALL FUNCTION 'QSS0_FLTP_TO_CHAR_CONVERSION'
+*              EXPORTING
+*                i_number_of_digits       = 3
+*                i_fltp_value             = lv_fltp
+*              IMPORTING
+*                e_char_field             = lv_qty.
+*            MOVE lv_qty TO wa_input-comp_qty.
+*            MODIFY lt_input FROM wa_input.
+*          ENDIF.
+*        ENDLOOP.
+
+    ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form create_data
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM process_bapi_data USING l_type l_matnr l_rea l_kwmeng l_value.
+    "Header
+    IF t_head IS INITIAL.
+        CLEAR wa_head.
+        wa_head-doc_type = l_type.
+        wa_head-sales_org = wa_data-vkorg.
+        wa_head-distr_chan = wa_data-vtweg.
+        wa_head-doc_date = wa_data-audat.
+        wa_head-division = wa_data-spart.
+        wa_head-sales_off = wa_data-vkbur.
+        wa_head-purch_no_c = wa_data-bstkd.
+        wa_head-cust_grp1 = 'G'.
+        wa_head-ord_reason = l_rea.
+        APPEND wa_head TO t_head.
+    ENDIF.
+
+    "Item
+    CLEAR wa_item.
+    wa_item-itm_number = w_posnr.
+    wa_item-material = l_matnr.
+    wa_item-plant = wa_data-werks.
+    wa_item-short_text = wa_data-arktx.
+    APPEND wa_item TO t_item.
+
+    "Partner
+    IF t_par IS INITIAL .
+        CLEAR wa_par.
+        wa_par-partn_role = 'AG'.
+        wa_par-partn_numb = wa_data-kunnr.
+        APPEND wa_par TO t_par.
+
+        CLEAR wa_par.
+        wa_par-partn_role = 'WE'.
+        wa_par-partn_numb = wa_data-get.
+        APPEND wa_par TO t_par.
+
+        CLEAR wa_par.
+        wa_par-partn_role = 'AF'.
+        wa_par-partn_numb = wa_data-sales.
+        APPEND wa_par TO t_par.
+    ENDIF.
+
+    "Condition
+    IF l_value IS NOT INITIAL.
+        CLEAR wa_cond.
+        wa_cond-itm_number = w_posnr.
+        wa_cond-cond_type = 'PR01'.
+        wa_cond-cond_p_unt = '1000'.
+        wa_cond-cond_value = l_value.
+        APPEND wa_cond TO t_cond.
+    ENDIF.
+
+    "Schedule
+    IF wa_data-kwmeng < 0.
+        SHIFT wa_data-kwmeng LEFT DELETING LEADING '-'.
+    ENDIF.
+    CLEAR wa_sch.
+    wa_sch-itm_number = w_posnr.
+    wa_sch-req_qty = l_kwmeng.
+    APPEND wa_sch TO t_sch.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form convert_data
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> WA_TAB_EAN11
+*&---------------------------------------------------------------------*
+FORM convert_data  USING l_input.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input = l_input
+      IMPORTING
+        output = l_input.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form create_quotation
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM create_quotation .
+    REFRESH t_return.
+
+    CALL FUNCTION 'BAPI_SALESORDER_CREATEFROMDAT2'
+      EXPORTING
+        order_header_in = wa_head
+      IMPORTING
+        salesdocument = l_vbeln
+      TABLES
+        return = t_return
+        order_items_in = t_item
+        order_partners = t_par
+        order_schedules_in = t_sch
+        order_conditions_in = t_cond.
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form create_quotation
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*& -->  p1        text
+*& <--  p2        text
+*&---------------------------------------------------------------------*
+FORM create_return_quotation.
+    REFRESH t_return.
+
+    CALL FUNCTION 'BAPI_CUSTOMERRETURN_CREATE'
+      EXPORTING
+        return_header_in = wa_head
+      IMPORTING
+        salesdocument = l_vbeln
+      TABLES
+        return = t_return
+        return_items_in = t_item
+        return_partners = t_par
+        return_schedules_in = t_sch
+        return_conditions_in = t_cond
+      EXCEPTIONS
+        OTHERS = 01..
+ENDFORM.
+*&---------------------------------------------------------------------*
+*& Form get_file
+*&---------------------------------------------------------------------*
+*& text
+*&---------------------------------------------------------------------*
+*&      --> T_TAB
+*&      --> WA_TAB
+*&      --> P_FILE
+*&---------------------------------------------------------------------*
+FORM get_file  TABLES   lt_tab
+               USING    lwa_tab STRUCTURE wa_tab
+                        l_file.
+    TYPE-POOLS truxs.
+    DATA:it_raw TYPE truxs_t_text_data.
+
+    DATA: BEGIN OF gt_data OCCURS 0,
+            col1 TYPE char10,
+            col2 TYPE char10,
+          END OF gt_data.
+*    Excel传值
+    CALL FUNCTION 'TEXT_CONVERT_XLS_TO_SAP'
+      EXPORTING
+*       I_FIELD_SEPERATOR =
+*        i_line_header = 'X'
+        i_tab_raw_data = it_raw            " WORK TABLE
+        i_filename = l_file
+      TABLES
+        i_tab_converted_data = lt_tab[]   "ACTUAL DATA
+      EXCEPTIONS
+        conversion_failed = 1
+      OTHERS = 2.
+    IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+ENDFORM.
