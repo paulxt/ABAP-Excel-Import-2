@@ -1,0 +1,113 @@
+*&---------------------------------------------------------------------*
+*& INCLUDE     TOP
+*&---------------------------------------------------------------------*
+TABLES: vbak, vbap.
+
+DATA: w_bstkd(35),
+      w_arktx(40),
+      l_vbeln(10),
+      error_message TYPE string,
+      w_lines TYPE i,
+      w_posnr TYPE i,
+      w_addAll TYPE p,
+      w_line1 TYPE i,
+      w_line2 TYPE i,
+      w_webgui(1),
+      w_netpr TYPE vbap-netpr,
+      w_kwmeng TYPE vbap-kwmeng.
+
+"BAPI
+DATA: wa_head LIKE bapisdhd1,                        "VBAK
+      t_head LIKE STANDARD TABLE OF wa_head,
+      wa_item LIKE bapisditm,                        "VBAP
+      t_item LIKE STANDARD TABLE OF wa_item,
+      wa_par LIKE bapiparnr,                          "PARTNER
+      t_par LIKE STANDARD TABLE OF wa_par,
+      wa_cond LIKE bapicond,
+      t_cond LIKE STANDARD TABLE OF wa_cond,
+      wa_sch LIKE bapischdl,
+      t_sch LIKE STANDARD TABLE OF wa_sch,
+      t_return LIKE STANDARD TABLE OF bapiret2,
+      wa_return LIKE bapiret2.
+
+
+DATA: BEGIN OF wa_tab,
+        ean11(18),                    "國家碼 mara-ean11
+        arktx(40),                    "品名
+        price(10),                    "進價
+        stock_l(10),                  "上月存貨
+        purchase_t(10),               "本月進貨
+        return_t(20),                 "本月退貨
+        sales_t(10),                  "本月銷貨
+        stock_t(10),                  "本月存貨
+        sales_t_price(10),            "本月銷貨進價額
+      END OF wa_tab,
+      t_tab LIKE STANDARD TABLE OF wa_tab,
+      wa_tab2 LIKE wa_tab,
+      t_tab2 LIKE STANDARD TABLE OF wa_tab2.
+
+DATA: BEGIN OF wa_data,
+        vbeln(10),
+        ean11(18),
+*       表頭
+        auart(4),           "訂單類型
+        bstkd(35),          "放到客戶參考  w_bstkd暫存
+        audat(8),           "文件日期
+        vkorg(4),           "銷售組織
+        vtweg(2),           "配銷通路
+        spart(2),           "部門
+        vkbur(4),           "銷售據點
+        kunnr(10),          "買方
+*       明細
+        matnr(40),          "品名
+        arktx(40),          "品名說明
+        werks(4),           "工廠
+        netpr(17),          "進價
+        kwmeng(17),         "本月銷貨  有正負之分
+*       夥伴
+        get(10),            "收貨人
+        sales(10),          "業務
+      END OF wa_data,
+      t_data LIKE STANDARD TABLE OF wa_data,
+      wa_data2 LIKE wa_data,
+      t_data2 LIKE STANDARD TABLE OF wa_data2.
+
+DATA: BEGIN OF wa_matnr,
+        matnr TYPE mara-matnr,
+        ean11 TYPE mara-ean11,
+      END OF wa_matnr,
+      t_matnr LIKE STANDARD TABLE OF wa_matnr.
+DATA: BEGIN OF wa_tvak,
+        auart TYPE tvak-auart,
+        vbtyp TYPE tvak-vbtyp,
+      END OF wa_tvak,
+      t_tvak LIKE STANDARD TABLE OF wa_tvak.
+
+
+DATA: BEGIN OF wa_mvke,
+        matnr TYPE mvke-matnr,
+        vkorg TYPE mvke-vkorg,
+        vtweg TYPE mvke-vtweg,
+      END OF wa_mvke,
+      t_mvke LIKE STANDARD TABLE OF wa_mvke.
+
+DATA: BEGIN OF wa_marc,
+        matnr TYPE marc-matnr,
+        werks TYPE marc-werks,
+      END OF wa_marc,
+      t_marc LIKE STANDARD TABLE OF wa_marc.
+
+***********************************************************************
+* Selection Screen / Option / Parameter
+***********************************************************************
+PARAMETERS: p_auart TYPE vbak-auart OBLIGATORY,
+            p_audat TYPE vbak-audat OBLIGATORY DEFAULT sy-datum,
+            p_vkorg TYPE vbak-vkorg OBLIGATORY,
+            p_vtweg TYPE vbak-vtweg OBLIGATORY,
+            p_spart TYPE vbak-spart OBLIGATORY,
+            p_vkbur TYPE vbak-vkbur OBLIGATORY,
+            p_kunnr TYPE vbak-kunnr OBLIGATORY,
+            p_get TYPE knvp-kunnr OBLIGATORY,
+            p_sales TYPE knvp-kunnr OBLIGATORY,
+            p_werks TYPE vbap-werks.
+PARAMETERS p_file TYPE rlgrap-filename OBLIGATORY.
